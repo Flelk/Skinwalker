@@ -1,0 +1,9 @@
+{
+  "name": "Skinwalker",
+  "version_number": "1.0.0",
+  "website_url": "",
+  "description": "A new monster copies your team's voices to lure you around corners, drags you off, and walks back wearing your face. Everyone in the lobby needs it.",
+  "dependencies": [
+    "BepInEx-BepInExPack-5.4.2305"
+  ]
+}
