@@ -12,7 +12,7 @@ internal class Brain
 {
     private enum Phase { Roam, Figure, Empty, Ambush, Snap, Grab, Fake }
 
-    private const float SnapSeconds = 0.35f, LureTimeout = 45f, FakeTimeout = 70f;
+    private const float SnapSeconds = 0.35f, LureTimeout = 45f, FakeTimeout = 90f, FakeMinSeconds = 45f, TakenCooldown = 300f;
 
     private readonly EnemyParent parent;
     private readonly EnemyHidden hidden;
@@ -32,6 +32,8 @@ internal class Brain
     private float nextWear;
 
     private readonly HashSet<int> victims = new HashSet<int>();
+    private readonly Dictionary<int, float> lastTaken = new Dictionary<int, float>();
+    private bool grabFromFake;
     private readonly Dictionary<int, int> deathLines = new Dictionary<int, int>();
 
     private PlayerAvatar trapped;
@@ -48,7 +50,7 @@ internal class Brain
         parent.enemyName = "Skinwalker";
         parent.DespawnedTimeMin = 15f;
         parent.DespawnedTimeMax = 30f;
-        ScheduleLure();
+        nextLure = Plugin.StartGraceSeconds.Value;
     }
 
     /// <summary>It always looks like a player, so there's never an invisible monster.</summary>
@@ -171,7 +173,7 @@ internal class Brain
     /// <summary>Only goes for someone on their own, and leaves people in the truck alone.</summary>
     private PlayerAvatar PickTarget(List<PlayerAvatar> alive)
     {
-        var candidates = alive.Where(p => (!p.RoomVolumeCheck || !p.RoomVolumeCheck.inTruck) && Isolated(p, alive)).ToList();
+        var candidates = alive.Where(p => (!p.RoomVolumeCheck || !p.RoomVolumeCheck.inTruck) && Isolated(p, alive) && !RecentlyTaken(p)).ToList();
         if (candidates.Count == 0) return null;
         return candidates.OrderByDescending(p => NearestOther(p, alive) + Random.Range(0f, 8f)).First();
     }
@@ -205,6 +207,9 @@ internal class Brain
         Plugin.Log.LogInfo($"Lure: {phase} on {target.playerName}, using {(speaker >= 0 ? Net.AvatarOf(speaker)?.playerName : "no voice")}.");
         return true;
     }
+
+    private bool RecentlyTaken(PlayerAvatar player) =>
+        !testing && lastTaken.TryGetValue(Net.ActorOf(player), out float time) && Time.time - time < TakenCooldown;
 
     private int PickSpeaker(PlayerAvatar who, List<PlayerAvatar> alive)
     {
@@ -382,7 +387,10 @@ internal class Brain
     private void StartGrab(PlayerAvatar player)
     {
         target = player;
+        grabFromFake = phase == Phase.Snap && wearingVictim;
+        wearingVictim = false;
         victims.Add(Net.ActorOf(player));
+        lastTaken[Net.ActorOf(player)] = Time.time;
 
         hidden.playerTarget = player;
         if (SemiFunc.IsMultiplayer()) hidden.photonView.RPC("UpdatePlayerTargetRPC", RpcTarget.All, player.photonView.ViewID);
@@ -433,7 +441,8 @@ internal class Brain
         phase = Phase.Roam;
 
         List<PlayerAvatar> others = Alive().Where(p => p != victim).ToList();
-        if (others.Count > 0 && Random.Range(0, 100) < Plugin.SwapChance.Value)
+        // A fake that just kidnapped someone doesn't get to swap again, or it never stops.
+        if (!grabFromFake && others.Count > 0 && Random.Range(0, 100) < Plugin.SwapChance.Value)
         {
             BeginSwap(victim, true);
             return;
@@ -446,8 +455,11 @@ internal class Brain
 
     // ---------- the swap ----------
 
+    private bool wearingVictim;
+
     private void BeginSwap(PlayerAvatar victim, bool trap)
     {
+        wearingVictim = true;
         speaker = Net.ActorOf(victim);
         List<PlayerAvatar> alive = Alive();
         target = alive.Where(p => p != victim).OrderBy(p => Vector3.Distance(p.transform.position, victim.transform.position)).FirstOrDefault() ?? victim;
@@ -498,7 +510,7 @@ internal class Brain
         Speak(speaker, 9f, 16f);
 
         // It waits until the person it's following is on their own.
-        if (phaseTime > 12f && distance < 5f && Isolated(target, alive)) SnapAt(target);
+        if (phaseTime > FakeMinSeconds && distance < 5f && Isolated(target, alive) && !RecentlyTaken(target)) SnapAt(target);
         else if (phaseTime > FakeTimeout) ResetToRoam();
     }
 
@@ -529,6 +541,7 @@ internal class Brain
         phase = Phase.Roam;
         phaseTime = 0f;
         testing = false;
+        wearingVictim = false;
         WearSomeone();
         ScheduleLure();
     }

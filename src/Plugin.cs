@@ -12,7 +12,7 @@ public class Plugin : BaseUnityPlugin
     internal static ManualLogSource Log;
     internal static ConfigEntry<bool> ShareMyVoice, ShowVoiceNotice, TestKeys;
     internal static ConfigEntry<int> SpawnChance, SwapChance, DropDamage;
-    internal static ConfigEntry<float> LureMinSeconds, LureMaxSeconds, TrapSeconds, IsolationDistance, LineVolume;
+    internal static ConfigEntry<float> LureMinSeconds, LureMaxSeconds, TrapSeconds, IsolationDistance, LineVolume, StartGraceSeconds;
 
     private void Awake()
     {
@@ -27,10 +27,12 @@ public class Plugin : BaseUnityPlugin
 
         SpawnChance = Config.Bind("Monster", "SpawnChance", 100,
             new ConfigDescription("Percent chance it's on a level. Host only.", new AcceptableValueRange<int>(0, 100)));
-        LureMinSeconds = Config.Bind("Monster", "LureMinSeconds", 25f,
-            new ConfigDescription("Shortest time between lures. Host only.", new AcceptableValueRange<float>(5f, 600f)));
-        LureMaxSeconds = Config.Bind("Monster", "LureMaxSeconds", 60f,
-            new ConfigDescription("Longest time between lures. Host only.", new AcceptableValueRange<float>(5f, 600f)));
+        StartGraceSeconds = Config.Bind("Monster", "StartGraceSeconds", 180f,
+            new ConfigDescription("How long a level runs before its first lure. Host only.", new AcceptableValueRange<float>(0f, 1200f)));
+        LureMinSeconds = Config.Bind("Monster", "MinSecondsBetweenLures", 150f,
+            new ConfigDescription("Shortest time between lures. Host only.", new AcceptableValueRange<float>(5f, 1800f)));
+        LureMaxSeconds = Config.Bind("Monster", "MaxSecondsBetweenLures", 300f,
+            new ConfigDescription("Longest time between lures. Host only.", new AcceptableValueRange<float>(5f, 1800f)));
         SwapChance = Config.Bind("Monster", "SwapChance", 35,
             new ConfigDescription("Percent chance it swaps with you after a kidnapping. Host only.", new AcceptableValueRange<int>(0, 100)));
         DropDamage = Config.Bind("Monster", "DropDamage", 25,
