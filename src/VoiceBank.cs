@@ -59,6 +59,9 @@ internal static class VoiceBank
 
     internal static void Play(int actor, int id, Vector3 position, bool follow)
     {
+        // Nobody ever hears the monster using their own voice. Solo is the exception, as it's the only voice there is.
+        if (GameManager.Multiplayer() && actor == Net.LocalActor) return;
+
         if (!clips.TryGetValue(actor, out var list)) return;
         int i = list.FindIndex(c => c.id == id);
         if (i < 0) return;
@@ -77,7 +80,8 @@ internal static class VoiceBank
         source.spatialBlend = 1f;
         source.rolloffMode = AudioRolloffMode.Linear;
         source.minDistance = 2f;
-        source.maxDistance = 30f;
+        source.maxDistance = 22f;
+        source.volume = Plugin.LineVolume.Value;
         source.dopplerLevel = 0f;
 
         // Same mixer as real voices, so it follows the voice volume setting and sounds like voice chat.

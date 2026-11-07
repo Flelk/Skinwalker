@@ -2,7 +2,8 @@
 
 Something on the level has been listening to your team.
 
-- **It copies voices.** You hear a teammate say something they really said earlier, from around a corner.
+- **It copies voices.** You hear a teammate say something they really said earlier, from around a corner. You never hear it use your own voice, so you won't know.
+- **It waits until you're alone.** It only goes after someone with no teammate nearby, and backs off if one catches up.
 - **The corner.** It always looks like one of your team. Usually it stands there facing away, until you get close or stare too long. Sometimes it's gone before you get there and the voice moves further away. Sometimes it just rushes you.
 - **The kidnapping.** It drags you off. Teammates can stun it to free you, and pressing jump shortens the drag. It drops you hurt, far from everyone, and uses your voice to lure them.
 - **The Swap.** Sometimes it leaves you stuck and walks back wearing your body, name tag and voice. A teammate can grab you to free you, and pressing jump frees you sooner.
@@ -26,6 +27,8 @@ It can also wander the level looking like a teammate, so take a second look at w
 | --- | --- | --- |
 | ShareMyVoice | true | capture your voice and share it with the lobby |
 | ShowVoiceNotice | true | show a reminder at the start of a level |
+| LineVolume | 0.7 | how loud the copied voices are for you |
+| IsolationDistance | 15 | it only goes after someone with no teammate this close, in meters (host only) |
 | SpawnChance | 100 | percent chance per level (host only) |
 | LureMinSeconds / LureMaxSeconds | 25 / 60 | time between lures (host only) |
 | SwapChance | 35 | percent chance it swaps after a kidnapping (host only) |

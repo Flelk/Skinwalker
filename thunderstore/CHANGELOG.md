@@ -1,5 +1,10 @@
 # Changelog
 
+## 4.0.0
+- It only goes after someone with no teammate within 15 meters, and gives up if one catches up.
+- Copied voices are quieter and don't carry as far.
+- You never hear it using your own voice.
+
 ## 3.0.0
 - It's never invisible now. It always looks like a player, including while it wanders and when it grabs you.
 

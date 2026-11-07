@@ -20,7 +20,8 @@ internal class Brain
 
     private Phase phase = Phase.Roam;
     private float nextLure, nextLine, phaseTime, stare;
-    private bool forced;
+    private bool forced, testing;
+    private int pendingVoice = -1;
     private PlayerAvatar target;
     private int speaker = -1;
     private int hops;
@@ -145,8 +146,11 @@ internal class Brain
         if (hidden.currentState != State.Idle && hidden.currentState != State.Roam) return;
         if (!forced && SemiFunc.EnemySpawnIdlePause()) return;
 
+        testing = forced;
         forced = false;
-        if (!StartLure(null, -1)) nextLure = 5f;
+        int voice = pendingVoice;
+        if (StartLure(null, voice)) pendingVoice = -1;
+        else nextLure = 5f;
     }
 
     // ---------- the lure ----------
@@ -161,10 +165,13 @@ internal class Brain
         return nearest;
     }
 
-    /// <summary>Goes for someone on their own, and leaves people in the truck alone.</summary>
+    private bool Isolated(PlayerAvatar player, List<PlayerAvatar> alive, float share = 1f) =>
+        testing || NearestOther(player, alive) >= Plugin.IsolationDistance.Value * share;
+
+    /// <summary>Only goes for someone on their own, and leaves people in the truck alone.</summary>
     private PlayerAvatar PickTarget(List<PlayerAvatar> alive)
     {
-        var candidates = alive.Where(p => !p.RoomVolumeCheck || !p.RoomVolumeCheck.inTruck).ToList();
+        var candidates = alive.Where(p => (!p.RoomVolumeCheck || !p.RoomVolumeCheck.inTruck) && Isolated(p, alive)).ToList();
         if (candidates.Count == 0) return null;
         return candidates.OrderByDescending(p => NearestOther(p, alive) + Random.Range(0f, 8f)).First();
     }
@@ -180,7 +187,7 @@ internal class Brain
         hidden.enemy.NavMeshAgent.ResetPath();
         hops = Random.Range(1, 3);
 
-        speaker = forcedSpeaker >= 0 ? forcedSpeaker : PickSpeaker(target, alive);
+        speaker = forcedSpeaker >= 0 && forcedSpeaker != Net.ActorOf(target) ? forcedSpeaker : PickSpeaker(target, alive);
 
         int roll = Random.Range(0, 100);
         phase = roll < 55 ? Phase.Figure : roll < 85 ? Phase.Empty : Phase.Ambush;
@@ -216,7 +223,8 @@ internal class Brain
                 return (avatar ? Vector3.Distance(avatar.transform.position, who.transform.position) : 50f) + Random.Range(0f, 15f);
             }).First();
         }
-        return voices.Contains(whoActor) ? whoActor : -1;
+        // Solo, your own voice is all it has. Online you'd never hear it, so it stays silent instead.
+        return !GameManager.Multiplayer() && voices.Contains(whoActor) ? whoActor : -1;
     }
 
     private bool FindHidingSpot(PlayerAvatar near, List<PlayerAvatar> alive, float min, float max, out Vector3 spot)
@@ -226,7 +234,8 @@ internal class Brain
             LevelPoint point = SemiFunc.LevelPointGet(near.transform.position, min, max);
             if (!point) break;
             if (!NavMesh.SamplePosition(point.transform.position + Random.insideUnitSphere * 2f, out NavMeshHit hit, 3f, -1)) continue;
-            if (alive.Any(p => CanSee(p, hit.position) || (p != near && Vector3.Distance(p.transform.position, hit.position) < 6f))) continue;
+            float clear = testing ? 6f : Mathf.Max(6f, Plugin.IsolationDistance.Value);
+            if (alive.Any(p => CanSee(p, hit.position) || (p != near && Vector3.Distance(p.transform.position, hit.position) < clear))) continue;
             spot = hit.position;
             return true;
         }
@@ -282,6 +291,7 @@ internal class Brain
             ResetToRoam();
             return;
         }
+        if (GaveUpOnCompany()) return;
         Speak(speaker, 7f, 12f);
 
         Vector3 here = enemy.transform.position;
@@ -295,6 +305,22 @@ internal class Brain
             target = closest;
             SnapAt(target);
         }
+    }
+
+    /// <summary>If a teammate has caught up with the target, the trick's off. Hysteresis stops it flipping at the edge.</summary>
+    private bool GaveUpOnCompany()
+    {
+        List<PlayerAvatar> alive = Alive();
+        if (Isolated(target, alive, 0.7f) && ClosestAlone(alive)) return false;
+        Plugin.Log.LogInfo("Not alone any more, giving up.");
+        ResetToRoam();
+        return true;
+    }
+
+    private bool ClosestAlone(List<PlayerAvatar> alive)
+    {
+        PlayerAvatar closest = ClosestTo(enemy.transform.position, out float distance);
+        return !closest || closest == target || distance > 8f || Isolated(closest, alive, 0.7f);
     }
 
     private void SnapAt(PlayerAvatar player)
@@ -314,6 +340,7 @@ internal class Brain
             ResetToRoam();
             return;
         }
+        if (GaveUpOnCompany()) return;
         Speak(speaker, 6f, 10f);
 
         float distance = Vector3.Distance(target.transform.position, enemy.transform.position);
@@ -343,6 +370,7 @@ internal class Brain
             ResetToRoam();
             return;
         }
+        if (GaveUpOnCompany()) return;
         Speak(speaker, 6f, 10f);
 
         PlayerAvatar closest = ClosestTo(enemy.transform.position, out float distance);
@@ -411,9 +439,8 @@ internal class Brain
             return;
         }
 
-        if (others.Count > 0 && StartLure(others[Random.Range(0, others.Count)], VoiceBank.HasClips(actor) ? actor : -1))
-            return;
-
+        // It uses your voice on the next teammate it finds alone, whenever that is.
+        if (VoiceBank.HasClips(actor) && others.Count > 0) pendingVoice = actor;
         ScheduleLure();
     }
 
@@ -448,7 +475,7 @@ internal class Brain
     private void TickFake(float dt)
     {
         List<PlayerAvatar> alive = Alive();
-        if (alive.Count == 0 || phaseTime > FakeTimeout && !TargetGone() && Attack(alive)) return;
+        if (alive.Count == 0) return;
 
         PlayerAvatar real = Net.AvatarOf(speaker);
         var marks = alive.Where(p => p != real).ToList();
@@ -471,14 +498,8 @@ internal class Brain
         Speak(speaker, 9f, 16f);
 
         // It waits until the person it's following is on their own.
-        if (phaseTime > 12f && distance < 5f && NearestOther(target, marks) > 10f) SnapAt(target);
-    }
-
-    private bool Attack(List<PlayerAvatar> alive)
-    {
-        target = alive.OrderBy(p => Vector3.Distance(p.transform.position, enemy.transform.position)).First();
-        SnapAt(target);
-        return true;
+        if (phaseTime > 12f && distance < 5f && Isolated(target, alive)) SnapAt(target);
+        else if (phaseTime > FakeTimeout) ResetToRoam();
     }
 
     // ---------- things that happen to it ----------
@@ -507,6 +528,7 @@ internal class Brain
         if (phase == Phase.Roam) return;
         phase = Phase.Roam;
         phaseTime = 0f;
+        testing = false;
         WearSomeone();
         ScheduleLure();
     }
