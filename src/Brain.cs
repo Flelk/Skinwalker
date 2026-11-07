@@ -7,24 +7,28 @@ using State = EnemyHidden.State;
 
 namespace Skinwalker;
 
-/// <summary>The monster's decisions. Only the host (or a solo player) runs this.</summary>
+/// <summary>
+/// The monster's decisions. Only the host (or a solo player) runs this.
+/// It's a trap: it stands completely still in an empty room, calling out, and only moves once someone walks in.
+/// </summary>
 internal class Brain
 {
-    private enum Phase { Roam, Figure, Empty, Ambush, Snap, Grab, Fake }
+    private enum Phase { Wait, Trap, Empty, Snap, Grab }
 
-    private const float SnapSeconds = 0.35f, LureTimeout = 45f, FakeTimeout = 90f, FakeMinSeconds = 45f, TakenCooldown = 300f;
+    private const float SnapSeconds = 0.35f, CallSeconds = 45f, TrapSeconds = 180f, TakenCooldown = 300f, BumpDistance = 3.5f;
 
     private readonly EnemyParent parent;
     private readonly EnemyHidden hidden;
     private readonly Enemy enemy;
 
-    private Phase phase = Phase.Roam;
-    private float nextLure, nextLine, phaseTime, stare;
-    private bool forced, testing;
+    private Phase phase = Phase.Wait;
+    private float nextLure, nextLine, phaseTime;
+    private bool forced, testing, rushes;
     private int pendingVoice = -1;
     private PlayerAvatar target;
     private int speaker = -1;
     private int hops;
+    private RoomVolume trapRoom;
 
     // What it's currently wearing. Sent again every few seconds for anyone still loading when it changed.
     private int wornActor = -1;
@@ -33,14 +37,15 @@ internal class Brain
 
     private readonly HashSet<int> victims = new HashSet<int>();
     private readonly Dictionary<int, float> lastTaken = new Dictionary<int, float>();
-    private bool grabFromFake;
+    private bool wearingVictim, grabFromFake;
     private readonly Dictionary<int, int> deathLines = new Dictionary<int, int>();
 
     private PlayerAvatar trapped;
     private Vector3 trapAnchor;
     private float trapTimer;
 
-    internal bool Holding => phase != Phase.Roam && phase != Phase.Grab;
+    /// <summary>True whenever the game's own roaming and investigating should stay switched off.</summary>
+    internal bool Holding => phase != Phase.Grab;
 
     internal Brain(EnemyParent parent, EnemyHidden hidden)
     {
@@ -84,6 +89,7 @@ internal class Brain
     {
         forced = true;
         nextLure = 0f;
+        if (phase != Phase.Grab && phase != Phase.Snap) phase = Phase.Wait;
     }
 
     internal void ForceSwap()
@@ -95,7 +101,8 @@ internal class Brain
             Plugin.Log.LogInfo("Test: it was despawned and is coming back, press F11 again in a moment.");
             return;
         }
-        ResetToRoam();
+        Stop(false);
+        testing = true;
         BeginSwap(me, Alive().Count > 1);
     }
 
@@ -105,18 +112,18 @@ internal class Brain
     {
         if (parent.Spawned) KeepWearing();
 
-        if (phase != Phase.Roam)
+        if (phase != Phase.Wait)
         {
             if (enemy.IsStunned())
             {
                 Plugin.Log.LogInfo("Stunned, giving up.");
-                ResetToRoam();
+                Stop(false);
                 if (trapped) trapTimer = Mathf.Min(trapTimer, 3f);
                 return;
             }
             if (!parent.Spawned)
             {
-                ResetToRoam();
+                Stop(false);
                 return;
             }
             parent.SpawnedTimerPause(30f);
@@ -125,17 +132,15 @@ internal class Brain
         phaseTime += dt;
         switch (phase)
         {
-            case Phase.Roam: TickRoam(dt); break;
-            case Phase.Figure: TickFigure(dt); break;
+            case Phase.Wait: TickWait(dt); break;
+            case Phase.Trap: TickTrap(); break;
             case Phase.Empty: TickEmpty(); break;
-            case Phase.Ambush: TickAmbush(); break;
             case Phase.Snap: if (phaseTime >= SnapSeconds) StartGrab(target); break;
             case Phase.Grab: TickGrab(); break;
-            case Phase.Fake: TickFake(dt); break;
         }
     }
 
-    private void TickRoam(float dt)
+    private void TickWait(float dt)
     {
         nextLure -= dt;
         if (nextLure > 0f) return;
@@ -151,11 +156,15 @@ internal class Brain
         testing = forced;
         forced = false;
         int voice = pendingVoice;
-        if (StartLure(null, voice)) pendingVoice = -1;
-        else nextLure = 5f;
+        if (StartLure(voice)) pendingVoice = -1;
+        else
+        {
+            testing = false;
+            nextLure = 5f;
+        }
     }
 
-    // ---------- the lure ----------
+    // ---------- who's where ----------
 
     private List<PlayerAvatar> Alive() => SemiFunc.PlayerGetList().Where(p => p && !p.isDisabled && !p.deadSet).ToList();
 
@@ -167,10 +176,51 @@ internal class Brain
         return nearest;
     }
 
-    private bool Isolated(PlayerAvatar player, List<PlayerAvatar> alive, float share = 1f) =>
-        testing || NearestOther(player, alive) >= Plugin.IsolationDistance.Value * share;
+    private bool Isolated(PlayerAvatar player, List<PlayerAvatar> alive) =>
+        testing || NearestOther(player, alive) >= Plugin.IsolationDistance.Value;
 
-    /// <summary>Only goes for someone on their own, and leaves people in the truck alone.</summary>
+    private bool RecentlyTaken(PlayerAvatar player) =>
+        !testing && lastTaken.TryGetValue(Net.ActorOf(player), out float time) && Time.time - time < TakenCooldown;
+
+    /// <summary>It never grabs the person it's copying. Alone in a lobby, you're the only person it can copy.</summary>
+    private bool IsCopying(PlayerAvatar player)
+    {
+        if (SemiFunc.PlayerGetList().Count <= 1) return false;
+        int actor = Net.ActorOf(player);
+        return actor == wornActor || actor == speaker;
+    }
+
+    private bool TargetGone() => !target || target.isDisabled || target.deadSet;
+
+    private static bool CanSee(PlayerAvatar player, Vector3 position)
+    {
+        Vector3 eye = player.transform.position + Vector3.up * 1.4f;
+        return !Physics.Linecast(eye, position + Vector3.up * 1.2f, SemiFunc.LayerMaskGetVisionObstruct(), QueryTriggerInteraction.Ignore);
+    }
+
+    private static bool SameRoom(RoomVolume a, RoomVolume b) => a && b && (a == b || (a.MapModule && a.MapModule == b.MapModule));
+
+    private static bool InRoom(PlayerAvatar player, RoomVolume room) =>
+        player.RoomVolumeCheck && player.RoomVolumeCheck.CurrentRooms.Any(r => SameRoom(r, room));
+
+    private bool InTrapRoom(PlayerAvatar player)
+    {
+        if (Vector3.Distance(player.transform.position, enemy.transform.position) < BumpDistance) return true;
+        if (trapRoom) return InRoom(player, trapRoom);
+        return parent.currentRooms.Any(room => InRoom(player, room));
+    }
+
+    /// <summary>Someone it can spring on who's walked into its room, closest first. Groups walk past it unharmed.</summary>
+    private PlayerAvatar Entrant()
+    {
+        List<PlayerAvatar> alive = Alive();
+        return alive
+            .Where(p => InTrapRoom(p) && !IsCopying(p) && !RecentlyTaken(p) && Isolated(p, alive))
+            .OrderBy(p => Vector3.Distance(p.transform.position, enemy.transform.position))
+            .FirstOrDefault();
+    }
+
+    /// <summary>Goes for someone on their own, and leaves people in the truck alone.</summary>
     private PlayerAvatar PickTarget(List<PlayerAvatar> alive)
     {
         var candidates = alive.Where(p => (!p.RoomVolumeCheck || !p.RoomVolumeCheck.inTruck) && Isolated(p, alive) && !RecentlyTaken(p)).ToList();
@@ -178,23 +228,48 @@ internal class Brain
         return candidates.OrderByDescending(p => NearestOther(p, alive) + Random.Range(0f, 8f)).First();
     }
 
-    private bool StartLure(PlayerAvatar who, int forcedSpeaker)
+    /// <summary>A spot nobody can see, in a room nobody's in.</summary>
+    private bool FindHidingSpot(PlayerAvatar near, List<PlayerAvatar> alive, float min, float max, out Vector3 spot, out RoomVolume room)
+    {
+        for (int i = 0; i < 16; i++)
+        {
+            LevelPoint point = SemiFunc.LevelPointGet(near.transform.position, min, max);
+            if (!point) break;
+            if (!NavMesh.SamplePosition(point.transform.position + Random.insideUnitSphere * 2f, out NavMeshHit hit, 3f, -1)) continue;
+            if (alive.Any(p => CanSee(p, hit.position) || InRoom(p, point.Room) || Vector3.Distance(p.transform.position, hit.position) < 6f)) continue;
+            spot = hit.position;
+            room = point.Room;
+            return true;
+        }
+        spot = default;
+        room = null;
+        return false;
+    }
+
+    private void MoveTo(Vector3 spot, RoomVolume room)
+    {
+        enemy.EnemyTeleported(spot);
+        enemy.NavMeshAgent.ResetPath();
+        trapRoom = room;
+    }
+
+    // ---------- setting the trap ----------
+
+    private bool StartLure(int forcedSpeaker)
     {
         List<PlayerAvatar> alive = Alive();
-        target = who ? who : PickTarget(alive);
+        target = PickTarget(alive);
         if (!target) return false;
+        if (!FindHidingSpot(target, alive, 8f, 22f, out Vector3 spot, out RoomVolume room)) return false;
 
-        if (!FindHidingSpot(target, alive, 8f, 22f, out Vector3 spot)) return false;
-        enemy.EnemyTeleported(spot);
-        hidden.enemy.NavMeshAgent.ResetPath();
+        MoveTo(spot, room);
         hops = Random.Range(1, 3);
-
-        speaker = forcedSpeaker >= 0 && forcedSpeaker != Net.ActorOf(target) ? forcedSpeaker : PickSpeaker(target, alive);
+        speaker = forcedSpeaker >= 0 && forcedSpeaker != Net.ActorOf(target) ? forcedSpeaker : PickSpeaker(target);
 
         int roll = Random.Range(0, 100);
-        phase = roll < 55 ? Phase.Figure : roll < 85 ? Phase.Empty : Phase.Ambush;
+        phase = roll >= 55 && roll < 85 ? Phase.Empty : Phase.Trap;
+        rushes = roll >= 85;
         phaseTime = 0f;
-        stare = 0f;
         nextLine = 0f;
 
         // It stands with its back to you, wearing whoever's voice it's using.
@@ -204,14 +279,11 @@ internal class Brain
         hidden.rotationTarget = Quaternion.Euler(0f, yaw, 0f);
         Wear(body, false, yaw);
 
-        Plugin.Log.LogInfo($"Lure: {phase} on {target.playerName}, using {(speaker >= 0 ? Net.AvatarOf(speaker)?.playerName : "no voice")}.");
+        Plugin.Log.LogInfo($"Trap set: {(phase == Phase.Empty ? "empty" : rushes ? "rush" : "figure")} for {target.playerName}, using {(speaker >= 0 ? Net.AvatarOf(speaker)?.playerName : "no voice")}.");
         return true;
     }
 
-    private bool RecentlyTaken(PlayerAvatar player) =>
-        !testing && lastTaken.TryGetValue(Net.ActorOf(player), out float time) && Time.time - time < TakenCooldown;
-
-    private int PickSpeaker(PlayerAvatar who, List<PlayerAvatar> alive)
+    private int PickSpeaker(PlayerAvatar who)
     {
         int whoActor = Net.ActorOf(who);
         var voices = VoiceBank.ActorsWithClips();
@@ -232,33 +304,11 @@ internal class Brain
         return !GameManager.Multiplayer() && voices.Contains(whoActor) ? whoActor : -1;
     }
 
-    private bool FindHidingSpot(PlayerAvatar near, List<PlayerAvatar> alive, float min, float max, out Vector3 spot)
+    /// <summary>It only calls to someone who's still alone, and after a while it goes quiet and just waits.</summary>
+    private void Call(float gapMin, float gapMax)
     {
-        for (int i = 0; i < 12; i++)
-        {
-            LevelPoint point = SemiFunc.LevelPointGet(near.transform.position, min, max);
-            if (!point) break;
-            if (!NavMesh.SamplePosition(point.transform.position + Random.insideUnitSphere * 2f, out NavMeshHit hit, 3f, -1)) continue;
-            float clear = testing ? 6f : Mathf.Max(6f, Plugin.IsolationDistance.Value);
-            if (alive.Any(p => CanSee(p, hit.position) || (p != near && Vector3.Distance(p.transform.position, hit.position) < clear))) continue;
-            spot = hit.position;
-            return true;
-        }
-        spot = default;
-        return false;
-    }
-
-    private static bool CanSee(PlayerAvatar player, Vector3 position)
-    {
-        Vector3 eye = player.transform.position + Vector3.up * 1.4f;
-        return !Physics.Linecast(eye, position + Vector3.up * 1.2f, SemiFunc.LayerMaskGetVisionObstruct(), QueryTriggerInteraction.Ignore);
-    }
-
-    private static bool Facing(PlayerAvatar player, Vector3 position)
-    {
-        Vector3 direction = position - player.transform.position;
-        direction.y = 0f;
-        return Vector3.Dot(player.transform.forward, direction.normalized) > 0.6f;
+        if (phaseTime > CallSeconds || TargetGone() || !Isolated(target, Alive())) return;
+        Speak(speaker, gapMin, gapMax);
     }
 
     private void Speak(int actor, float gapMin, float gapMax, bool follow = false)
@@ -271,74 +321,55 @@ internal class Brain
         if (clip >= 0) Net.SendLine(actor, clip, enemy.transform.position + Vector3.up * 1.3f, follow);
     }
 
-    private bool TargetGone() => !target || target.isDisabled || target.deadSet;
+    // ---------- the trap ----------
 
-    private PlayerAvatar ClosestTo(Vector3 position, out float distance)
+    private void TickTrap()
     {
-        PlayerAvatar closest = null;
-        distance = 999f;
-        foreach (PlayerAvatar player in Alive())
+        if (phaseTime > TrapSeconds)
         {
-            float d = Vector3.Distance(player.transform.position, position);
-            if (d < distance)
-            {
-                distance = d;
-                closest = player;
-            }
-        }
-        return closest;
-    }
-
-    private void TickFigure(float dt)
-    {
-        if (TargetGone() || phaseTime > LureTimeout)
-        {
-            ResetToRoam();
+            Stop(true);
             return;
         }
-        if (GaveUpOnCompany()) return;
-        Speak(speaker, 7f, 12f);
+        Call(7f, 12f);
 
-        Vector3 here = enemy.transform.position;
-        PlayerAvatar closest = ClosestTo(here, out float distance);
-        if (!closest) return;
+        PlayerAvatar entrant = Entrant();
+        if (!entrant) return;
 
-        // Anyone who walks up to it, or stands there looking at it for too long.
-        if (CanSee(closest, here) && Facing(closest, here) && distance < 12f) stare += dt;
-        if (distance < 3.5f || stare > 2.5f)
+        target = entrant;
+        if (rushes) StartGrab(entrant);
+        else SnapAt(entrant);
+    }
+
+    private void TickEmpty()
+    {
+        if (phaseTime > TrapSeconds)
         {
-            if (IsCopying(closest))
-            {
-                ResetToRoam();
-                return;
-            }
-            target = closest;
-            SnapAt(target);
+            Stop(true);
+            return;
         }
-    }
+        Call(6f, 10f);
 
-    /// <summary>If a teammate has caught up with the target, the trick's off. Hysteresis stops it flipping at the edge.</summary>
-    private bool GaveUpOnCompany()
-    {
-        List<PlayerAvatar> alive = Alive();
-        if (Isolated(target, alive, 0.7f) && ClosestAlone(alive)) return false;
-        Plugin.Log.LogInfo("Not alone any more, giving up.");
-        ResetToRoam();
-        return true;
-    }
+        PlayerAvatar entrant = Entrant();
+        if (!entrant) return;
+        target = entrant;
 
-    private bool ClosestAlone(List<PlayerAvatar> alive)
-    {
-        PlayerAvatar closest = ClosestTo(enemy.transform.position, out float distance);
-        return !closest || closest == target || distance > 8f || Isolated(closest, alive, 0.7f);
-    }
+        // The voice moves on to another room, as if they've gone on ahead.
+        if (hops-- > 0 && FindHidingSpot(target, Alive(), 10f, 22f, out Vector3 spot, out RoomVolume room))
+        {
+            MoveTo(spot, room);
+            Vector3 away = spot - target.transform.position;
+            float yaw = Quaternion.LookRotation(new Vector3(away.x, 0.001f, away.z)).eulerAngles.y;
+            hidden.rotationTarget = Quaternion.Euler(0f, yaw, 0f);
+            Wear(wornActor, false, yaw);
+            phaseTime = 0f;
+            nextLine = 1.5f;
+            return;
+        }
 
-    /// <summary>It never grabs the person it's copying. Alone in a lobby, you're the only person it can copy.</summary>
-    private bool IsCopying(PlayerAvatar player)
-    {
-        if (SemiFunc.PlayerGetList().Count <= 1) return false;
-        int actor = Net.ActorOf(player);
-        return actor == wornActor || actor == speaker;
+        // Out of places to lead you: it's right behind you.
+        Vector3 behind = target.transform.position - target.transform.forward * 2.5f;
+        if (NavMesh.SamplePosition(behind, out NavMeshHit hit, 2f, -1)) enemy.EnemyTeleported(hit.position);
+        StartGrab(target);
     }
 
     private void SnapAt(PlayerAvatar player)
@@ -351,54 +382,6 @@ internal class Brain
         phaseTime = 0f;
     }
 
-    private void TickEmpty()
-    {
-        if (TargetGone() || phaseTime > LureTimeout)
-        {
-            ResetToRoam();
-            return;
-        }
-        if (GaveUpOnCompany()) return;
-        Speak(speaker, 6f, 10f);
-
-        float distance = Vector3.Distance(target.transform.position, enemy.transform.position);
-        if (distance >= 5f && phaseTime < 18f) return;
-
-        List<PlayerAvatar> alive = Alive();
-        if (hops-- > 0 && FindHidingSpot(target, alive, 10f, 20f, out Vector3 spot))
-        {
-            // The voice moves further off, as if they've gone on ahead.
-            enemy.EnemyTeleported(spot);
-            enemy.NavMeshAgent.ResetPath();
-            phaseTime = 0f;
-            nextLine = 1.5f;
-            return;
-        }
-
-        // Out of places to lead you: it's right behind you.
-        Vector3 behind = target.transform.position - target.transform.forward * 2.5f;
-        if (NavMesh.SamplePosition(behind, out NavMeshHit hit, 2f, -1)) enemy.EnemyTeleported(hit.position);
-        StartGrab(target);
-    }
-
-    private void TickAmbush()
-    {
-        if (TargetGone() || phaseTime > LureTimeout)
-        {
-            ResetToRoam();
-            return;
-        }
-        if (GaveUpOnCompany()) return;
-        Speak(speaker, 6f, 10f);
-
-        PlayerAvatar closest = ClosestTo(enemy.transform.position, out float distance);
-        if (closest && distance < 3f)
-        {
-            if (IsCopying(closest)) ResetToRoam();
-            else StartGrab(closest);
-        }
-    }
-
     // ---------- the kidnapping ----------
 
     private void StartGrab(PlayerAvatar player)
@@ -406,12 +389,12 @@ internal class Brain
         if (IsCopying(player))
         {
             Plugin.Log.LogInfo($"Not grabbing {player.playerName}, it's copying them.");
-            ResetToRoam();
+            Stop(true);
             return;
         }
 
         target = player;
-        grabFromFake = phase == Phase.Snap && wearingVictim;
+        grabFromFake = wearingVictim;
         wearingVictim = false;
         victims.Add(Net.ActorOf(player));
         lastTaken[Net.ActorOf(player)] = Time.time;
@@ -431,9 +414,9 @@ internal class Brain
         State state = hidden.currentState;
         if (state == State.PlayerGoTo)
         {
-            // The game gives up after 2 seconds of this state, which is too short from around a corner.
+            // The game gives up after 2 seconds of this state, which is too short from across a room.
             hidden.stateTimer = 2f;
-            if (phaseTime > 10f) ResetToRoam();
+            if (phaseTime > 10f) Stop(true);
             return;
         }
         if (state == State.PlayerPickup || state == State.PlayerMove || state == State.PlayerRelease)
@@ -448,7 +431,7 @@ internal class Brain
             return;
         }
         if (!TargetGone()) Plugin.Log.LogInfo($"Grab ended early in state {state}.");
-        ResetToRoam();
+        Stop(true);
     }
 
     private void Payoff()
@@ -459,12 +442,11 @@ internal class Brain
         if (Plugin.DropDamage.Value > 0)
             victim.playerHealth.HurtOther(Plugin.DropDamage.Value, enemy.transform.position, false, SemiFunc.EnemyGetIndex(enemy));
 
-        // Going straight to Idle skips the Leave state, which would despawn it.
+        // Going straight to Idle skips the Leave state.
         hidden.UpdateState(State.Idle);
-        Wear(wornActor, false, float.NaN);
-        phase = Phase.Roam;
 
         List<PlayerAvatar> others = Alive().Where(p => p != victim).ToList();
+
         // A fake that just kidnapped someone doesn't get to swap again, or it never stops.
         if (!grabFromFake && others.Count > 0 && Random.Range(0, 100) < Plugin.SwapChance.Value)
         {
@@ -474,17 +456,16 @@ internal class Brain
 
         // It uses your voice on the next teammate it finds alone, whenever that is.
         if (VoiceBank.HasClips(actor) && others.Count > 0) pendingVoice = actor;
-        ScheduleLure();
+        Stop(true);
     }
 
     // ---------- the swap ----------
 
-    private bool wearingVictim;
-
+    /// <summary>It leaves you stuck, then waits in a room near your team, wearing you and calling in your voice.</summary>
     private void BeginSwap(PlayerAvatar victim, bool trap)
     {
-        wearingVictim = true;
         speaker = Net.ActorOf(victim);
+        wearingVictim = true;
         List<PlayerAvatar> alive = Alive();
         target = alive.Where(p => p != victim).OrderBy(p => Vector3.Distance(p.transform.position, victim.transform.position)).FirstOrDefault() ?? victim;
 
@@ -495,47 +476,19 @@ internal class Brain
             trapTimer = Plugin.TrapSeconds.Value;
         }
 
-        if (FindHidingSpot(target, alive, 6f, 16f, out Vector3 spot))
-        {
-            enemy.EnemyTeleported(spot);
-            enemy.NavMeshAgent.ResetPath();
-        }
-
-        Wear(speaker, false, float.NaN);
-        phase = Phase.Fake;
-        phaseTime = 0f;
-        nextLine = 3f;
-        Plugin.Log.LogInfo($"Swap: wearing {victim.playerName}, following {target.playerName}.");
-    }
-
-    private void TickFake(float dt)
-    {
-        List<PlayerAvatar> alive = Alive();
-        if (alive.Count == 0) return;
-
-        PlayerAvatar real = Net.AvatarOf(speaker);
-        var marks = alive.Where(p => p != real).ToList();
-        if (marks.Count == 0) marks = alive;
-        target = marks.OrderBy(p => Vector3.Distance(p.transform.position, enemy.transform.position)).First();
-
-        float distance = Vector3.Distance(target.transform.position, enemy.transform.position);
-        if (distance > 4f)
-        {
-            enemy.NavMeshAgent.SetDestination(target.transform.position);
-            enemy.NavMeshAgent.OverrideAgent(2.8f, 10f, 0.25f);
-        }
+        if (FindHidingSpot(target, alive, 8f, 22f, out Vector3 spot, out RoomVolume room)) MoveTo(spot, room);
         else
         {
             enemy.NavMeshAgent.ResetPath();
-            Vector3 toward = target.transform.position - enemy.transform.position;
-            if (toward.sqrMagnitude > 0.1f) hidden.rotationTarget = Quaternion.Euler(0f, Quaternion.LookRotation(new Vector3(toward.x, 0.001f, toward.z)).eulerAngles.y, 0f);
+            trapRoom = null;
         }
 
-        Speak(speaker, 9f, 16f);
-
-        // It waits until the person it's following is on their own.
-        if (phaseTime > FakeMinSeconds && distance < 5f && Isolated(target, alive) && !RecentlyTaken(target) && !IsCopying(target)) SnapAt(target);
-        else if (phaseTime > FakeTimeout) ResetToRoam();
+        Wear(speaker, false, float.NaN);
+        phase = Phase.Trap;
+        rushes = false;
+        phaseTime = 0f;
+        nextLine = 3f;
+        Plugin.Log.LogInfo($"Swap: wearing {victim.playerName}, waiting near {target.playerName}.");
     }
 
     // ---------- things that happen to it ----------
@@ -559,13 +512,23 @@ internal class Brain
         Plugin.Log.LogInfo($"Keeping {player.playerName}'s last words.");
     }
 
-    private void ResetToRoam()
+    /// <summary>Back to waiting, harmless, out of the way, until the next lure.</summary>
+    private void Stop(bool hide)
     {
-        if (phase == Phase.Roam) return;
-        phase = Phase.Roam;
+        phase = Phase.Wait;
         phaseTime = 0f;
         testing = false;
         wearingVictim = false;
+        speaker = -1;
+        trapRoom = null;
+
+        List<PlayerAvatar> alive = Alive();
+        if (hide && alive.Count > 0 && parent.Spawned && !enemy.IsStunned() && !alive.Any(p => CanSee(p, enemy.transform.position)) &&
+            FindHidingSpot(alive[Random.Range(0, alive.Count)], alive, 15f, 60f, out Vector3 spot, out RoomVolume room))
+        {
+            MoveTo(spot, room);
+        }
+
         WearSomeone();
         ScheduleLure();
     }

@@ -1,5 +1,10 @@
 # Changelog
 
+## 8.0.0
+- It's a trap now. It never walks around or walks up to anyone. It stands still in an empty room until someone enters, then attacks.
+- The Swap waits in a room near your team instead of following them.
+- Groups can walk past it unharmed, and after 3 minutes with no takers it moves on.
+
 ## 7.0.0
 - It never grabs the person it's copying.
 

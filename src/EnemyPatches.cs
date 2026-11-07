@@ -63,6 +63,16 @@ internal static class EnemyPatches
     [HarmonyPatch(typeof(EnemyHidden), nameof(EnemyHidden.StateRoam))]
     private static bool Roam(EnemyHidden __instance) => !BrainHolding(__instance);
 
+    // Leave walks it across the level. It stays put instead, so going from there to Idle is enough.
+    [HarmonyPrefix]
+    [HarmonyPatch(typeof(EnemyHidden), nameof(EnemyHidden.StateLeave))]
+    private static bool Leave(EnemyHidden __instance)
+    {
+        if (!Ours(__instance)) return true;
+        __instance.UpdateState(EnemyHidden.State.Idle);
+        return false;
+    }
+
     // It only attacks when the brain says so, and never just because it saw someone or was grabbed.
     [HarmonyPrefix]
     [HarmonyPatch(typeof(EnemyHidden), nameof(EnemyHidden.OnVision))]
