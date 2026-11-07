@@ -1,5 +1,8 @@
 # Changelog
 
+## 7.0.0
+- It never grabs the person it's copying.
+
 ## 6.0.0
 - Fixed missing body parts and cosmetics on the copied player.
 

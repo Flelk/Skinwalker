@@ -1,6 +1,6 @@
 {
   "name": "Skinwalker",
-  "version_number": "6.0.0",
+  "version_number": "7.0.0",
   "website_url": "",
   "description": "A new monster copies your team's voices to lure you around corners, drags you off, and walks back wearing your face. Everyone in the lobby needs it.",
   "dependencies": [

@@ -198,7 +198,7 @@ internal class Brain
         nextLine = 0f;
 
         // It stands with its back to you, wearing whoever's voice it's using.
-        int body = speaker >= 0 ? speaker : Net.ActorOf(alive.FirstOrDefault(p => p != target) ?? target);
+        int body = speaker >= 0 ? speaker : Net.ActorOf(SemiFunc.PlayerGetList().FirstOrDefault(p => p && p != target) ?? target);
         Vector3 away = spot - target.transform.position;
         float yaw = Quaternion.LookRotation(new Vector3(away.x, 0.001f, away.z)).eulerAngles.y;
         hidden.rotationTarget = Quaternion.Euler(0f, yaw, 0f);
@@ -307,6 +307,11 @@ internal class Brain
         if (CanSee(closest, here) && Facing(closest, here) && distance < 12f) stare += dt;
         if (distance < 3.5f || stare > 2.5f)
         {
+            if (IsCopying(closest))
+            {
+                ResetToRoam();
+                return;
+            }
             target = closest;
             SnapAt(target);
         }
@@ -326,6 +331,14 @@ internal class Brain
     {
         PlayerAvatar closest = ClosestTo(enemy.transform.position, out float distance);
         return !closest || closest == target || distance > 8f || Isolated(closest, alive, 0.7f);
+    }
+
+    /// <summary>It never grabs the person it's copying. Alone in a lobby, you're the only person it can copy.</summary>
+    private bool IsCopying(PlayerAvatar player)
+    {
+        if (SemiFunc.PlayerGetList().Count <= 1) return false;
+        int actor = Net.ActorOf(player);
+        return actor == wornActor || actor == speaker;
     }
 
     private void SnapAt(PlayerAvatar player)
@@ -379,13 +392,24 @@ internal class Brain
         Speak(speaker, 6f, 10f);
 
         PlayerAvatar closest = ClosestTo(enemy.transform.position, out float distance);
-        if (closest && distance < 3f) StartGrab(closest);
+        if (closest && distance < 3f)
+        {
+            if (IsCopying(closest)) ResetToRoam();
+            else StartGrab(closest);
+        }
     }
 
     // ---------- the kidnapping ----------
 
     private void StartGrab(PlayerAvatar player)
     {
+        if (IsCopying(player))
+        {
+            Plugin.Log.LogInfo($"Not grabbing {player.playerName}, it's copying them.");
+            ResetToRoam();
+            return;
+        }
+
         target = player;
         grabFromFake = phase == Phase.Snap && wearingVictim;
         wearingVictim = false;
@@ -510,7 +534,7 @@ internal class Brain
         Speak(speaker, 9f, 16f);
 
         // It waits until the person it's following is on their own.
-        if (phaseTime > FakeMinSeconds && distance < 5f && Isolated(target, alive) && !RecentlyTaken(target)) SnapAt(target);
+        if (phaseTime > FakeMinSeconds && distance < 5f && Isolated(target, alive) && !RecentlyTaken(target) && !IsCopying(target)) SnapAt(target);
         else if (phaseTime > FakeTimeout) ResetToRoam();
     }
 

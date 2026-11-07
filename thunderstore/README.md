@@ -2,7 +2,7 @@
 
 Something on the level has been listening to your team.
 
-- **It copies voices.** You hear a teammate say something they really said earlier, from around a corner. You never hear it use your own voice, so you won't know.
+- **It copies voices.** You hear a teammate say something they really said earlier, from around a corner. You never hear it use your own voice, so you won't know, and it never grabs the person it's copying.
 - **It waits until you're alone.** It only goes after someone with no teammate nearby, and backs off if one catches up. It leaves you alone for the first 3 minutes of a level, and for 5 minutes after it's taken you.
 - **The corner.** It always looks like one of your team. Usually it stands there facing away, until you get close or stare too long. Sometimes it's gone before you get there and the voice moves further away. Sometimes it just rushes you.
 - **The kidnapping.** It drags you off. Teammates can stun it to free you, and pressing jump shortens the drag. It drops you hurt, far from everyone, and uses your voice to lure them.
