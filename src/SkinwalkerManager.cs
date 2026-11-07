@@ -16,9 +16,6 @@ internal class SkinwalkerManager : MonoBehaviour
 
     private EnemyParent parent;
     private float nextSearch, nextStruggle;
-    private float noticeUntil;
-    private bool noticeShownThisLevel;
-    private GUIStyle noticeStyle;
 
     private void Awake() => Instance = this;
 
@@ -38,14 +35,7 @@ internal class SkinwalkerManager : MonoBehaviour
         if (!SemiFunc.RunIsLevel() || !LevelGenerator.Instance || !LevelGenerator.Instance.Generated)
         {
             if (parent || Brain != null) Forget();
-            noticeShownThisLevel = false;
             return;
-        }
-
-        if (!noticeShownThisLevel)
-        {
-            noticeShownThisLevel = true;
-            if (Plugin.ShowVoiceNotice.Value) noticeUntil = Time.unscaledTime + 8f;
         }
 
         if (!parent && Time.unscaledTime >= nextSearch)
@@ -123,18 +113,5 @@ internal class SkinwalkerManager : MonoBehaviour
         Hidden = null;
         Brain = null;
         Disguise.Clear();
-    }
-
-    private void OnGUI()
-    {
-        if (Time.unscaledTime >= noticeUntil || Event.current.type != EventType.Repaint) return;
-        noticeStyle ??= new GUIStyle(GUI.skin.label) { alignment = TextAnchor.MiddleCenter, fontStyle = FontStyle.Bold };
-
-        float scale = Mathf.Clamp(Screen.height / 1080f, 0.6f, 2f);
-        noticeStyle.fontSize = Mathf.RoundToInt(16f * scale);
-        string text = Plugin.ShareMyVoice.Value
-            ? "Skinwalker mod: your voice chat is being copied for this level. Turn off ShareMyVoice in its config to opt out."
-            : "Skinwalker mod: your voice isn't being copied, but other players' might be.";
-        GUI.Label(new Rect(0f, Screen.height * 0.08f, Screen.width, 40f * scale), text, noticeStyle);
     }
 }

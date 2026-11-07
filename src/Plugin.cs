@@ -10,7 +10,7 @@ namespace Skinwalker;
 public class Plugin : BaseUnityPlugin
 {
     internal static ManualLogSource Log;
-    internal static ConfigEntry<bool> ShareMyVoice, ShowVoiceNotice, TestKeys;
+    internal static ConfigEntry<bool> ShareMyVoice, TestKeys;
     internal static ConfigEntry<int> SpawnChance, SwapChance, DropDamage;
     internal static ConfigEntry<float> LureMinSeconds, LureMaxSeconds, TrapSeconds, IsolationDistance, LineVolume, StartGraceSeconds;
 
@@ -20,7 +20,6 @@ public class Plugin : BaseUnityPlugin
 
         ShareMyVoice = Config.Bind("Voice", "ShareMyVoice", true,
             "Capture clips of your voice chat and share them with your lobby. Clips stay in memory and are never saved. False = your mic is not captured.");
-        ShowVoiceNotice = Config.Bind("Voice", "ShowVoiceNotice", true, "Show a reminder that voices are being copied when a level starts.");
 
         LineVolume = Config.Bind("Voice", "LineVolume", 0.7f,
             new ConfigDescription("How loud the copied voices are for you.", new AcceptableValueRange<float>(0f, 1f)));

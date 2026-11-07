@@ -1,5 +1,8 @@
 # Changelog
 
+## 9.0.0
+- Removed the on-screen voice notice at the start of a level.
+
 ## 8.0.0
 - It's a trap now. It never walks around or walks up to anyone. It stands still in an empty room until someone enters, then attacks.
 - The Swap waits in a room near your team instead of following them.

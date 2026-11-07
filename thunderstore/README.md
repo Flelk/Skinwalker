@@ -24,7 +24,6 @@ Something on the level has been listening to your team.
 | Setting | Default | |
 | --- | --- | --- |
 | ShareMyVoice | true | capture your voice and share it with the lobby |
-| ShowVoiceNotice | true | show a reminder at the start of a level |
 | LineVolume | 0.7 | how loud the copied voices are for you |
 | IsolationDistance | 15 | it only goes after someone with no teammate this close, in meters (host only) |
 | SpawnChance | 100 | percent chance per level (host only) |
