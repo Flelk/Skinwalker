@@ -19,7 +19,7 @@ Something on the level has been listening to your team.
 ## Who needs it
 **Everyone in the lobby.** Players without it only get an ordinary invisible monster, and can't hear or see its tricks.
 
-## Config (`gabe.skinwalker.cfg`, or r2modman's Config editor)
+## Config (`flelk.skinwalker.cfg`, or r2modman's Config editor)
 | Setting | Default | |
 | --- | --- | --- |
 | ShareMyVoice | true | capture your voice and share it with the lobby |
