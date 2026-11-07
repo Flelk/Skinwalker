@@ -31,7 +31,7 @@ internal static class Disguise
 
     internal static void Apply(int actor, bool nameTag, bool snap, float newYaw)
     {
-        yaw = newYaw;
+        if (!float.IsNaN(newYaw)) yaw = newYaw;
         if (actor != WornActor)
         {
             Clear();
@@ -43,7 +43,7 @@ internal static class Disguise
 
         if (nameTag && !tag) tag = FakeNameTag.Create(Net.AvatarOf(actor));
         WornTag = nameTag;
-        if (snap) stretchTarget = 1.2f;
+        stretchTarget = snap ? 1.2f : 1f;
     }
 
     private static bool Build(int actor)
@@ -100,6 +100,14 @@ internal static class Disguise
             Clear();
             return false;
         }
+    }
+
+    /// <summary>The monster spends part of each level despawned, and the copy has to go with it.</summary>
+    internal static void SetVisible(bool visible)
+    {
+        if (body && body.activeSelf != visible) body.SetActive(visible);
+        if (tag && tag.gameObject.activeSelf != visible) tag.gameObject.SetActive(visible);
+        if (!visible) lastPosition = Vector3.zero;
     }
 
     /// <summary>Everything but the meshes and animator has to go, or it would act like a second copy of that player.</summary>

@@ -25,6 +25,11 @@ internal class Brain
     private int speaker = -1;
     private int hops;
 
+    // What it's currently wearing. Sent again every few seconds for anyone still loading when it changed.
+    private int wornActor = -1;
+    private bool wornSnap;
+    private float nextWear;
+
     private readonly HashSet<int> victims = new HashSet<int>();
     private readonly Dictionary<int, int> deathLines = new Dictionary<int, int>();
 
@@ -43,6 +48,27 @@ internal class Brain
         parent.DespawnedTimeMin = 15f;
         parent.DespawnedTimeMax = 30f;
         ScheduleLure();
+    }
+
+    /// <summary>It always looks like a player, so there's never an invisible monster.</summary>
+    private void Wear(int actor, bool snap, float yaw)
+    {
+        wornActor = actor;
+        wornSnap = snap;
+        nextWear = Time.unscaledTime + 5f;
+        Net.SendDisguise(actor, true, snap, yaw);
+    }
+
+    private void WearSomeone()
+    {
+        List<PlayerAvatar> alive = Alive();
+        if (alive.Count > 0) Wear(Net.ActorOf(alive[Random.Range(0, alive.Count)]), false, float.NaN);
+    }
+
+    private void KeepWearing()
+    {
+        if (wornActor < 0 || Net.AvatarOf(wornActor) == null) WearSomeone();
+        else if (Time.unscaledTime >= nextWear) Wear(wornActor, wornSnap, float.NaN);
     }
 
     private void ScheduleLure()
@@ -74,6 +100,8 @@ internal class Brain
 
     internal void Tick(float dt)
     {
+        if (parent.Spawned) KeepWearing();
+
         if (phase != Phase.Roam)
         {
             if (enemy.IsStunned())
@@ -160,15 +188,12 @@ internal class Brain
         stare = 0f;
         nextLine = 0f;
 
-        if (phase == Phase.Figure)
-        {
-            // It stands with its back to you, wearing whoever's voice it's using.
-            int body = speaker >= 0 ? speaker : Net.ActorOf(alive.FirstOrDefault(p => p != target) ?? target);
-            Vector3 away = spot - target.transform.position;
-            float yaw = Quaternion.LookRotation(new Vector3(away.x, 0f, away.z)).eulerAngles.y;
-            hidden.rotationTarget = Quaternion.Euler(0f, yaw, 0f);
-            Net.SendDisguise(body, true, false, yaw);
-        }
+        // It stands with its back to you, wearing whoever's voice it's using.
+        int body = speaker >= 0 ? speaker : Net.ActorOf(alive.FirstOrDefault(p => p != target) ?? target);
+        Vector3 away = spot - target.transform.position;
+        float yaw = Quaternion.LookRotation(new Vector3(away.x, 0.001f, away.z)).eulerAngles.y;
+        hidden.rotationTarget = Quaternion.Euler(0f, yaw, 0f);
+        Wear(body, false, yaw);
 
         Plugin.Log.LogInfo($"Lure: {phase} on {target.playerName}, using {(speaker >= 0 ? Net.AvatarOf(speaker)?.playerName : "no voice")}.");
         return true;
@@ -277,7 +302,7 @@ internal class Brain
         Vector3 toward = player.transform.position - enemy.transform.position;
         float yaw = Quaternion.LookRotation(new Vector3(toward.x, 0.001f, toward.z)).eulerAngles.y;
         hidden.rotationTarget = Quaternion.Euler(0f, yaw, 0f);
-        Net.SendDisguise(Disguise.WornActor, Disguise.WornTag, true, yaw);
+        Wear(wornActor, true, yaw);
         phase = Phase.Snap;
         phaseTime = 0f;
     }
@@ -376,7 +401,7 @@ internal class Brain
 
         // Going straight to Idle skips the Leave state, which would despawn it.
         hidden.UpdateState(State.Idle);
-        Net.SendDisguise(-1, false, false, 0f);
+        Wear(wornActor, false, float.NaN);
         phase = Phase.Roam;
 
         List<PlayerAvatar> others = Alive().Where(p => p != victim).ToList();
@@ -413,7 +438,7 @@ internal class Brain
             enemy.NavMeshAgent.ResetPath();
         }
 
-        Net.SendDisguise(speaker, true, false, 0f);
+        Wear(speaker, false, float.NaN);
         phase = Phase.Fake;
         phaseTime = 0f;
         nextLine = 3f;
@@ -482,7 +507,7 @@ internal class Brain
         if (phase == Phase.Roam) return;
         phase = Phase.Roam;
         phaseTime = 0f;
-        Net.SendDisguise(-1, false, false, 0f);
+        WearSomeone();
         ScheduleLure();
     }
 

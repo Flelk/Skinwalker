@@ -80,7 +80,8 @@ internal class SkinwalkerManager : MonoBehaviour
 
     private void LateUpdate()
     {
-        if (Center(out Vector3 center)) Disguise.Follow(center, Time.deltaTime);
+        Disguise.SetVisible(parent && parent.Spawned);
+        if (parent && parent.Spawned && Center(out Vector3 center)) Disguise.Follow(center, Time.deltaTime);
     }
 
     private void Search()
