@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using TMPro;
 using UnityEngine;
 using UnityEngine.Rendering;
@@ -17,6 +18,7 @@ internal static class Disguise
     private static Vector3 lastPosition;
     private static float yaw, stretch, stretchTarget = 1f;
     private static Vector3 baseScale;
+    private static int builtCosmetics;
 
     internal static void Clear()
     {
@@ -32,7 +34,8 @@ internal static class Disguise
     internal static void Apply(int actor, bool nameTag, bool snap, float newYaw)
     {
         if (!float.IsNaN(newYaw)) yaw = newYaw;
-        if (actor != WornActor)
+        // Other players' cosmetics arrive over the network, possibly after the copy was made.
+        if (actor != WornActor || CosmeticCount(Net.AvatarOf(actor)) != builtCosmetics)
         {
             Clear();
             if (actor < 0) return;
@@ -46,6 +49,11 @@ internal static class Disguise
         stretchTarget = snap ? 1.2f : 1f;
     }
 
+    private static int CosmeticCount(PlayerAvatar player) =>
+        player && player.playerAvatarVisuals && player.playerAvatarVisuals.playerCosmetics
+            ? player.playerAvatarVisuals.playerCosmetics.cosmeticEquipped.Count
+            : builtCosmetics;
+
     private static bool Build(int actor)
     {
         PlayerAvatar source = Net.AvatarOf(actor);
@@ -57,6 +65,9 @@ internal static class Disguise
             var holder = new GameObject("Skinwalker Body");
             holder.SetActive(false);
             GameObject copy = UnityEngine.Object.Instantiate(source.playerAvatarVisuals.gameObject, holder.transform);
+            SettleCosmetics(source.playerAvatarVisuals, copy);
+            PlayerAvatarVisuals copiedVisuals = copy.GetComponent<PlayerAvatarVisuals>();
+            GameObject copiedMeshes = copiedVisuals ? copiedVisuals.meshParent : null;
             Strip(copy);
 
             Transform original = source.playerAvatarVisuals.transform;
@@ -64,19 +75,22 @@ internal static class Disguise
             copy.transform.localRotation = Quaternion.identity;
             copy.transform.localScale = original.lossyScale;
 
-            PlayerAvatarVisuals visuals = source.playerAvatarVisuals;
-            string meshParentName = visuals.meshParent ? visuals.meshParent.name : null;
-            if (meshParentName != null)
+            // The real body hides its meshes and moves them around for things like death and the truck.
+            if (copiedMeshes)
             {
-                foreach (Transform t in copy.GetComponentsInChildren<Transform>(true))
-                    if (t.name == meshParentName) t.gameObject.SetActive(true);
+                copiedMeshes.SetActive(true);
+                copiedMeshes.transform.localPosition = Vector3.zero;
+                copiedMeshes.transform.localRotation = Quaternion.identity;
             }
 
-            // Your own body is shadow-only on your screen, and a copy of it would be too.
+            // Your own body is on a layer your camera doesn't draw, and is shadow-only. A copy of it would be too,
+            // which is why parts went missing. Other players' bodies are on PlayerVisuals.
+            int visibleLayer = LayerMask.NameToLayer("PlayerVisuals");
             foreach (Renderer renderer in copy.GetComponentsInChildren<Renderer>(true))
             {
-                renderer.enabled = true;
+                if (visibleLayer >= 0) renderer.gameObject.layer = visibleLayer;
                 renderer.shadowCastingMode = ShadowCastingMode.On;
+                if (renderer is SkinnedMeshRenderer skinned) skinned.updateWhenOffscreen = true;
             }
 
             animator = copy.GetComponent<Animator>();
@@ -91,6 +105,7 @@ internal static class Disguise
             baseScale = holder.transform.localScale;
             holder.SetActive(true);
             lastPosition = Vector3.zero;
+            builtCosmetics = CosmeticCount(source);
             WornActor = actor;
             return true;
         }
@@ -99,6 +114,38 @@ internal static class Disguise
             Plugin.Log.LogError($"Couldn't build the disguise: {e}");
             Clear();
             return false;
+        }
+    }
+
+    /// <summary>
+    /// Cosmetics are animated by scripts the copy doesn't keep, so whatever they were doing at that moment would stick.
+    /// A cosmetic still popping in would stay shrunken, and a part hidden for a pose like tumbling would stay at size zero.
+    /// This puts everything where it belongs for that player's outfit, ignoring their current pose.
+    /// </summary>
+    private static void SettleCosmetics(PlayerAvatarVisuals source, GameObject copy)
+    {
+        Cosmetic[] real = source.GetComponentsInChildren<Cosmetic>(true);
+        Cosmetic[] copied = copy.GetComponentsInChildren<Cosmetic>(true);
+        for (int i = 0; i < real.Length && i < copied.Length; i++)
+        {
+            var scales = real[i].meshParentsScale;
+            var parents = copied[i].meshParents;
+            for (int j = 0; j < scales.Count && j < parents.Count; j++)
+                if (parents[j]) parents[j].localScale = scales[j];
+        }
+
+        PlayerCosmetics cosmetics = source.playerCosmetics;
+        if (!cosmetics) return;
+
+        var worn = cosmetics.cosmeticEquipped.Where(c => c).ToList();
+        foreach (CosmeticHideCondition condition in copy.GetComponentsInChildren<CosmeticHideCondition>(true))
+        {
+            bool hidden = worn.Any(c =>
+                condition.cosmeticTypeList.Contains(c.type) ||
+                condition.cosmeticList.Contains(c.cosmeticAsset) ||
+                (c.cosmeticAsset && c.cosmeticAsset.customTypeList.Any(condition.customList.Contains)) ||
+                (c.cosmeticTypeAsset && c.cosmeticTypeAsset.customTypeList.Any(condition.customList.Contains)));
+            condition.transform.localScale = hidden ? Vector3.zero : Vector3.one;
         }
     }
 
